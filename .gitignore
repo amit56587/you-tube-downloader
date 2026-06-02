@@ -1,0 +1,16 @@
+_serving/
+downloads/
+ffmpeg-master-latest-win64-gpl/
+ffmpeg.exe
+ffmpeg
+*.mp4
+*.mp3
+*.mkv
+*.webm
+*.zip
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+*.part
