@@ -66,8 +66,8 @@ else:
 BROWSER_HEADERS = [
     '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     '--add-header', 'Accept-Language:en-US,en;q=0.9',
-    # Use Android + web player clients — bypasses bot detection on cloud IPs
-    '--extractor-args', 'youtube:player_client=android,web',
+    # web_embedded + ios: real high-quality DASH streams (720p/1080p/4K) without bot error
+    '--extractor-args', 'youtube:player_client=web_embedded,ios,android',
     '--no-check-certificates',
 ]
 
@@ -78,13 +78,17 @@ def ytdlp(*args):
 
 def fmt_for(quality):
     if quality == 'best':
-        return 'bestvideo+bestaudio/best' if HAS_FFMPEG else 'best'
-    h = quality.replace('p','')
+        # Strictly best video + best audio merged — real maximum quality
+        return ('bestvideo[vcodec^=avc1]+bestaudio/bestvideo+bestaudio/best'
+                if HAS_FFMPEG else 'best')
+    h = quality.replace('p', '')
     if HAS_FFMPEG:
-        return (f'bestvideo[height<={h}]+bestaudio'
-                f'/bestvideo[height<={h}]+bestaudio[ext=m4a]'
+        # Strictly enforce height — prefer avc1 (H.264) for compatibility
+        return (f'bestvideo[height={h}][vcodec^=avc1]+bestaudio'
+                f'/bestvideo[height<={h}][vcodec^=avc1]+bestaudio'
+                f'/bestvideo[height<={h}]+bestaudio'
                 f'/best[height<={h}]')
-    return f'best[height<={h}][ext=mp4]/best[height<={h}]/best'
+    return f'best[height={h}][ext=mp4]/best[height<={h}][ext=mp4]/best[height<={h}]/best'
 
 def find_media(directory):
     for f in os.listdir(directory):
