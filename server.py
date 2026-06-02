@@ -52,9 +52,26 @@ FFMPEG_PATH = find_ffmpeg()
 HAS_FFMPEG  = FFMPEG_PATH is not None
 print(f"ffmpeg: {'✅ ' + FFMPEG_PATH if HAS_FFMPEG else '❌ not found'}")
 
+# ── YouTube cookies (bypasses bot detection on cloud servers) ────
+COOKIES_FILE = None
+_yt_cookies = os.environ.get('YT_COOKIES', '').strip()
+if _yt_cookies:
+    COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'yt_cookies.txt')
+    with open(COOKIES_FILE, 'w', encoding='utf-8') as _f:
+        _f.write(_yt_cookies)
+    print('✅ YouTube cookies loaded from environment')
+else:
+    print('⚠️  No YT_COOKIES env var — some videos may require login')
+
+BROWSER_HEADERS = [
+    '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    '--add-header', 'Accept-Language:en-US,en;q=0.9',
+]
+
 def ytdlp(*args):
     extra = ['--ffmpeg-location', FFMPEG_PATH] if HAS_FFMPEG else []
-    return [sys.executable, '-m', 'yt_dlp'] + extra + list(args)
+    cookies = ['--cookies', COOKIES_FILE] if COOKIES_FILE else []
+    return [sys.executable, '-m', 'yt_dlp'] + extra + cookies + BROWSER_HEADERS + list(args)
 
 def fmt_for(quality):
     if quality == 'best':
