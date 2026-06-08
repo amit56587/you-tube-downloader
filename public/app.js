@@ -39,7 +39,7 @@ const safeName=s=>s.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/\.+$/,'').tri
 const isPlaylist=u=>u.includes('/playlist?')||(u.includes('list=')&&!u.includes('watch?v='));
 const escHtml=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-/* ===== UI ===== */
+/* ===== UI helpers ===== */
 function showError(msg){
   document.getElementById('error-text').textContent=msg;
   document.getElementById('error-box').style.display='flex';
@@ -64,29 +64,59 @@ function hideCards(){
   ['video-card','playlist-card','progress-container','features-section']
     .forEach(id=>document.getElementById(id).style.display='none');}
 
-/* ===== 2-Step Download (shows in Chrome download bar) =====
-   Step 1: POST /api/prepare  → server downloads from YouTube, returns file_id
-   Step 2: window.open /api/file/<file_id> → browser triggers download with progress bar
+/* ===== Async Job Poller =====
+   All heavy operations now run as background jobs on the server.
+   We POST to get a job_id immediately, then poll /api/job/<id> every 2s.
+   This prevents Railway's 30-second HTTP timeout from killing connections.
+*/
+async function pollJob(jobId, onProgress) {
+  const MAX_WAIT = 720000; // 12 minutes max
+  const INTERVAL = 2000;   // poll every 2 seconds
+  const start = Date.now();
+
+  while (Date.now() - start < MAX_WAIT) {
+    await new Promise(r => setTimeout(r, INTERVAL));
+    const res  = await fetch(`/api/job/${jobId}`);
+    const data = await res.json();
+
+    if (data.status === 'done')   return data.result;
+    if (data.status === 'error')  throw new Error(data.error || 'Job failed');
+    if (onProgress) onProgress(data);
+  }
+  throw new Error('Timed out waiting for server. Try a shorter video or lower quality.');
+}
+
+/* ===== 2-Step Download =====
+   Step 1: POST endpoint → get job_id immediately
+   Step 2: Poll job until done → get file_id
+   Step 3: Trigger browser download via <a> → shows in Chrome download bar
 */
 async function startDownload(prepareEndpoint, body, label) {
   hideError();
-  setDownloading(true,
-    `⏳ ${label}`,
-    'Downloading from YouTube — this takes 20–60 seconds…');
+  setDownloading(true, `⏳ ${label}`, 'Starting download on server…');
   try {
-    // Step 1 — server prepares file
-    const res  = await fetch(prepareEndpoint, {
+    // Step 1 — send request, get job_id immediately (no timeout issue)
+    const res1 = await fetch(prepareEndpoint, {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify(body)
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Download failed');
+    const data1 = await res1.json();
+    if (!res1.ok) throw new Error(data1.error || 'Failed to start download');
 
-    // Step 2 — trigger browser download via <a> GET request
-    // This shows immediately in Chrome's download bar with full progress!
+    const jobId = data1.job_id;
+    let elapsed = 0;
+
+    // Step 2 — poll until ready
+    const result = await pollJob(jobId, () => {
+      elapsed += 2;
+      setDownloading(true, `⏳ ${label}`,
+        `Downloading from YouTube… (${elapsed}s) — large videos take longer`);
+    });
+
+    // Step 3 — trigger browser download (shows in Chrome download bar!)
     const a = document.createElement('a');
-    a.href     = `/api/file/${data.file_id}`;
-    a.download = data.filename;
+    a.href     = `/api/file/${result.file_id}`;
+    a.download = result.filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -98,7 +128,7 @@ async function startDownload(prepareEndpoint, body, label) {
   }
 }
 
-/* ===== Fetch ===== */
+/* ===== Fetch video/playlist info ===== */
 async function fetchInfo(){
   const url=document.getElementById('url-input').value.trim();
   if(!url){showError('Please paste a YouTube URL!');return;}
@@ -113,10 +143,17 @@ async function fetchInfo(){
 
 /* ===== Single Video ===== */
 async function fetchVideoInfo(url){
-  const res=await fetch('/api/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
-  const data=await res.json();
-  if(!res.ok)throw new Error(data.error||'Failed to fetch video info');
-  videoInfo=data; renderVideoCard(data);}
+  // Step 1: start async job
+  const res = await fetch('/api/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error||'Failed to start info fetch');
+
+  // Step 2: poll for result
+  setLoading(true,'Fetching video info… (this takes 5-15 seconds)');
+  const info = await pollJob(data.job_id);
+  videoInfo = info;
+  renderVideoCard(info);
+}
 
 function renderVideoCard(info){
   document.getElementById('video-thumbnail').src        =info.thumbnail||'';
@@ -165,10 +202,17 @@ async function downloadSingle(){
 
 /* ===== Playlist ===== */
 async function fetchPlaylistInfo(url){
-  const res=await fetch('/api/playlist-info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
-  const data=await res.json();
-  if(!res.ok)throw new Error(data.error||'Failed to fetch playlist');
-  playlistInfo=data; renderPlaylistCard(data);}
+  // Step 1: start async job
+  const res = await fetch('/api/playlist-info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error||'Failed to start playlist fetch');
+
+  // Step 2: poll for result
+  setLoading(true,'Loading playlist… (this takes 10-30 seconds)');
+  const info = await pollJob(data.job_id);
+  playlistInfo = info;
+  renderPlaylistCard(info);
+}
 
 function renderPlaylistCard(info){
   document.getElementById('playlist-title').textContent=info.playlist_title||'Playlist';
